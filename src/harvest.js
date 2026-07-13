@@ -28,6 +28,10 @@ export async function runHarvesterIfNeeded() {
       console.log('[harvest] harvester prizeVault not set')
       return false
     }
+    if (/ContributionGTDeltaBalance|0x96908d60/i.test(msg)) {
+      console.log('[harvest] vault yield delta too low — nothing to contribute yet')
+      return false
+    }
     throw err
   }
 }

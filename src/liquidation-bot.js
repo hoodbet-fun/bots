@@ -13,6 +13,15 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
+async function getUsdgBalance(publicClient, account) {
+  return publicClient.readContract({
+    address: addresses.usdg,
+    abi: erc20Abi,
+    functionName: 'balanceOf',
+    args: [account.address],
+  })
+}
+
 async function ensureAllowance(publicClient, walletClient, account, token, spender, needed) {
   const allowance = await publicClient.readContract({
     address: token,
@@ -34,16 +43,22 @@ async function ensureAllowance(publicClient, walletClient, account, token, spend
   console.log('[liquidation-bot] approved tokenIn for router', hash)
 }
 
+/** @returns {'ok' | 'paused' | 'missing-key'} */
 export async function runLiquidationCycle() {
   if (!botPrivateKey) {
     console.log('[liquidation-bot] Set BOT_PRIVATE_KEY in .env')
-    return
+    return 'missing-key'
   }
 
   const publicClient = getPublicClient()
   const { account, client: walletClient } = getWalletClient()
   const pair = addresses.liquidationPair
   const router = addresses.liquidationRouter
+
+  const usdgBalance = await getUsdgBalance(publicClient, account)
+  if (usdgBalance === 0n) {
+    return 'paused'
+  }
 
   await runHarvesterIfNeeded()
 
@@ -76,12 +91,12 @@ export async function runLiquidationCycle() {
 
   if (maxOut === 0n) {
     console.log('[liquidation-bot] no yield to liquidate yet — need vault TVL + time')
-    return
+    return 'ok'
   }
 
   if (amountIn === 0n || amountIn >= maxOut) {
     console.log('[liquidation-bot] swap not profitable at current auction price')
-    return
+    return 'ok'
   }
 
   const tokenInBalance = await publicClient.readContract({
@@ -95,7 +110,7 @@ export async function runLiquidationCycle() {
     console.log(
       `[liquidation-bot] need ${amountIn} tokenIn (${tokenIn}), wallet has ${tokenInBalance}`,
     )
-    return
+    return 'ok'
   }
 
   await ensureAllowance(publicClient, walletClient, account, tokenIn, router, amountIn)
@@ -128,14 +143,27 @@ export async function runLiquidationCycle() {
     'USDG | tx',
     receipt.transactionHash,
   )
+  return 'ok'
 }
 
 export async function runLiquidationBot() {
   if (liquidationWatch) {
     console.log('[liquidation-bot] watch mode, poll every', liquidationPollMs, 'ms')
+    let paused = false
     for (;;) {
       try {
-        await runLiquidationCycle()
+        const status = await runLiquidationCycle()
+        if (status === 'paused') {
+          if (!paused) {
+            console.log(
+              '[liquidation-bot] paused — wallet has 0 USDG; will resume when funded',
+            )
+            paused = true
+          }
+        } else if (paused) {
+          console.log('[liquidation-bot] resumed — USDG detected in wallet')
+          paused = false
+        }
       } catch (err) {
         console.error('[liquidation-bot]', err?.shortMessage || err?.message || err)
       }
