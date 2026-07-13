@@ -55,12 +55,13 @@ export async function runLiquidationCycle() {
   const pair = addresses.liquidationPair
   const router = addresses.liquidationRouter
 
+  // Morpho fee harvest only needs ETH for gas — always try before swap logic.
+  await runHarvesterIfNeeded()
+
   const usdgBalance = await getUsdgBalance(publicClient, account)
   if (usdgBalance === 0n) {
     return 'paused'
   }
-
-  await runHarvesterIfNeeded()
 
   const [maxOut, tokenIn, tokenOut, amountIn] = await Promise.all([
     publicClient.readContract({
@@ -156,7 +157,7 @@ export async function runLiquidationBot() {
         if (status === 'paused') {
           if (!paused) {
             console.log(
-              '[liquidation-bot] paused — wallet has 0 USDG; will resume when funded',
+              '[liquidation-bot] swap paused — wallet has 0 USDG; harvest still runs each cycle',
             )
             paused = true
           }
