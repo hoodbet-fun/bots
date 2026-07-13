@@ -1,3 +1,20 @@
 node_modules/
-.env
 .DS_Store
+
+# Secrets — NEVER commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+secrets/
+wallets/
+wallet.json
+*_private_key*
+*.secret
+
+# Logs / runtime
+*.log
+.pm2/
+logs/

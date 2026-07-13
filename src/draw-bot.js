@@ -1,62 +1,117 @@
-import 'dotenv/config'
-import { createPublicClient, createWalletClient, http, parseAbi } from 'viem'
-import { privateKeyToAccount } from 'viem/accounts'
+import { parseAbiItem } from 'viem'
+import { addresses, botPrivateKey, rngBlockDelay } from './config.js'
+import { getPublicClient, getWalletClient } from './clients.js'
+import { drawManagerAbi, rngAbi } from './abis.js'
 
-const robinhood = {
-  id: 4663,
-  name: 'Robinhood Chain',
-  nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-  rpcUrls: { default: { http: [process.env.RH_RPC_URL || 'https://rpc.mainnet.chain.robinhood.com'] } },
+const randomnessRequestedEvent = parseAbiItem(
+  'event RandomnessRequested(uint32 indexed requestId, uint256 atBlock)',
+)
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms))
 }
 
-const rngAbi = parseAbi([
-  'function requestRandomness() external returns (uint32)',
-  'function fulfillRandomness(uint32 requestId) external',
-  'function isRequestComplete(uint32 requestId) external view returns (bool)',
-])
-
-const drawManagerAbi = parseAbi([
-  'function startDraw() external',
-  'function finishDraw() external',
-])
+async function waitForBlocks(publicClient, count) {
+  const start = await publicClient.getBlockNumber()
+  while ((await publicClient.getBlockNumber()) - start < BigInt(count)) {
+    await sleep(2000)
+  }
+}
 
 export async function runDrawBot() {
-  const account = privateKeyToAccount(process.env.BOT_PRIVATE_KEY)
-  const publicClient = createPublicClient({ chain: robinhood, transport: http() })
-  const walletClient = createWalletClient({ account, chain: robinhood, transport: http() })
-
-  const rngAddress = process.env.HOOD_RNG_ADDRESS
-  const drawManagerAddress = process.env.DRAW_MANAGER_ADDRESS
-
-  if (!rngAddress || !drawManagerAddress) {
-    console.log('[draw-bot] Set HOOD_RNG_ADDRESS and DRAW_MANAGER_ADDRESS')
+  if (!botPrivateKey) {
+    console.log('[draw-bot] Set BOT_PRIVATE_KEY in .env')
     return
   }
 
-  console.log('[draw-bot] Starting draw sequence...')
+  const publicClient = getPublicClient()
+  const { account, client: walletClient } = getWalletClient()
+
+  const canStart = await publicClient.readContract({
+    address: addresses.drawManager,
+    abi: drawManagerAbi,
+    functionName: 'canStartDraw',
+  })
+  if (!canStart) {
+    console.log('[draw-bot] canStartDraw=false — draw period not ready yet')
+    return
+  }
+
+  console.log('[draw-bot] startDraw...')
   const { request: startReq } = await publicClient.simulateContract({
-    address: drawManagerAddress,
+    address: addresses.drawManager,
     abi: drawManagerAbi,
     functionName: 'startDraw',
     account,
   })
-  await walletClient.writeContract(startReq)
+  const startHash = await walletClient.writeContract(startReq)
+  await publicClient.waitForTransactionReceipt({ hash: startHash })
+  console.log('[draw-bot] startDraw tx', startHash)
 
-  const hash = await walletClient.writeContract({
-    address: rngAddress,
+  console.log('[draw-bot] requestRandomness...')
+  const { request: rngReq } = await publicClient.simulateContract({
+    address: addresses.hoodRng,
     abi: rngAbi,
     functionName: 'requestRandomness',
+    account,
   })
-  const receipt = await publicClient.waitForTransactionReceipt({ hash })
-  // Parse requestId from logs in production
+  const rngHash = await walletClient.writeContract(rngReq)
+  const rngReceipt = await publicClient.waitForTransactionReceipt({ hash: rngHash })
 
-  console.log('[draw-bot] Waiting for RNG delay...')
-  await new Promise((r) => setTimeout(r, 60_000))
+  const rngLog = rngReceipt.logs.find(
+    (log) => log.address.toLowerCase() === addresses.hoodRng.toLowerCase(),
+  )
+  if (!rngLog) {
+    console.log('[draw-bot] could not parse requestId from logs')
+    return
+  }
 
-  // fulfill + finishDraw — wire requestId from events
-  console.log('[draw-bot] Draw cycle initiated', receipt.transactionHash)
+  const decoded = publicClient.decodeEventLog({
+    abi: [randomnessRequestedEvent],
+    data: rngLog.data,
+    topics: rngLog.topics,
+  })
+  const requestId = decoded.args.requestId
+  console.log('[draw-bot] requestId', requestId, 'tx', rngHash)
+
+  console.log(`[draw-bot] waiting ${rngBlockDelay} blocks...`)
+  await waitForBlocks(publicClient, rngBlockDelay)
+
+  console.log('[draw-bot] fulfillRandomness...')
+  const { request: fulfillReq } = await publicClient.simulateContract({
+    address: addresses.hoodRng,
+    abi: rngAbi,
+    functionName: 'fulfillRandomness',
+    args: [requestId],
+    account,
+  })
+  const fulfillHash = await walletClient.writeContract(fulfillReq)
+  await publicClient.waitForTransactionReceipt({ hash: fulfillHash })
+  console.log('[draw-bot] fulfill tx', fulfillHash)
+
+  const canFinish = await publicClient.readContract({
+    address: addresses.drawManager,
+    abi: drawManagerAbi,
+    functionName: 'canFinishDraw',
+  })
+  if (!canFinish) {
+    console.log('[draw-bot] canFinishDraw=false after RNG')
+    return
+  }
+
+  console.log('[draw-bot] finishDraw...')
+  const { request: finishReq } = await publicClient.simulateContract({
+    address: addresses.drawManager,
+    abi: drawManagerAbi,
+    functionName: 'finishDraw',
+    account,
+  })
+  const finishHash = await walletClient.writeContract(finishReq)
+  await publicClient.waitForTransactionReceipt({ hash: finishHash })
+  console.log('[draw-bot] draw complete', finishHash)
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  runDrawBot().catch(console.error)
-}
+runDrawBot().catch((err) => {
+  console.error('[draw-bot]', err?.shortMessage || err?.message || err)
+  process.exit(1)
+})

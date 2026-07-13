@@ -1,46 +1,151 @@
-import 'dotenv/config'
-import { createPublicClient, createWalletClient, http, parseAbi } from 'viem'
-import { privateKeyToAccount } from 'viem/accounts'
+import {
+  addresses,
+  botPrivateKey,
+  claimPollMs,
+  claimWatch,
+  maxPrizeIndexScan,
+  numberOfTiers,
+} from './config.js'
+import { getPublicClient, getWalletClient } from './clients.js'
+import { claimerAbi, prizePoolAbi } from './abis.js'
+import { fetchRecentWinnerAddresses, fetchVaultAccounts } from './subgraph.js'
 
-const robinhood = {
-  id: 4663,
-  name: 'Robinhood Chain',
-  nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-  rpcUrls: { default: { http: [process.env.RH_RPC_URL || 'https://rpc.mainnet.chain.robinhood.com'] } },
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms))
 }
 
-const claimerAbi = parseAbi([
-  'function claimPrizes(address vault, address winner, uint8 tier, uint32 prizeIndex) external returns (uint256)',
-])
+async function findUnclaimedWins(publicClient, vault, user) {
+  const wins = []
+  for (let tier = 0; tier < numberOfTiers; tier++) {
+    for (let prizeIndex = 0; prizeIndex < maxPrizeIndexScan; prizeIndex++) {
+      let won = false
+      try {
+        won = await publicClient.readContract({
+          address: addresses.prizePool,
+          abi: prizePoolAbi,
+          functionName: 'isWinner',
+          args: [vault, user, tier, prizeIndex],
+        })
+      } catch {
+        break
+      }
+      if (won) wins.push({ tier, prizeIndex })
+    }
+  }
+  return wins
+}
 
-export async function runClaimBot() {
-  const account = privateKeyToAccount(process.env.BOT_PRIVATE_KEY)
-  const publicClient = createPublicClient({ chain: robinhood, transport: http() })
-  const walletClient = createWalletClient({ account, chain: robinhood, transport: http() })
+async function claimForUser(publicClient, walletClient, account, vault, user, wins) {
+  const byTier = wins.reduce((acc, w) => {
+    if (!acc[w.tier]) acc[w.tier] = []
+    acc[w.tier].push(w.prizeIndex)
+    return acc
+  }, {})
 
-  const claimerAddress = process.env.CLAIMER_ADDRESS
-  const subgraphUrl = process.env.SUBGRAPH_URL
+  let totalClaimed = 0n
 
-  if (!claimerAddress) {
-    console.log('[claim-bot] Set CLAIMER_ADDRESS')
+  for (const [tierStr, indices] of Object.entries(byTier)) {
+    const tier = Number(tierStr)
+    const { request } = await publicClient.simulateContract({
+      address: addresses.claimer,
+      abi: claimerAbi,
+      functionName: 'claimPrizes',
+      args: [vault, tier, [user], [indices], account.address, 0n],
+      account,
+    })
+    const hash = await walletClient.writeContract(request)
+    const receipt = await publicClient.waitForTransactionReceipt({ hash })
+    totalClaimed += 1n
+    console.log(
+      '[claim-bot] claimed tier',
+      tier,
+      'for',
+      user,
+      'indices',
+      indices.join(','),
+      'tx',
+      receipt.transactionHash,
+    )
+  }
+
+  return totalClaimed
+}
+
+export async function runClaimCycle() {
+  if (!botPrivateKey) {
+    console.log('[claim-bot] Set BOT_PRIVATE_KEY in .env')
     return
   }
 
-  if (subgraphUrl) {
-    const res = await fetch(subgraphUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query: `{ accounts(first: 10, orderBy: balance, orderDirection: desc) { id } }`,
-      }),
-    })
-    const data = await res.json()
-    console.log('[claim-bot] Candidates from subgraph', data)
+  const publicClient = getPublicClient()
+  const { account, client: walletClient } = getWalletClient()
+  const vault = addresses.prizeVault
+
+  const lastAwarded = await publicClient.readContract({
+    address: addresses.prizePool,
+    abi: prizePoolAbi,
+    functionName: 'getLastAwardedDrawId',
+  })
+
+  if (lastAwarded === 0) {
+    console.log('[claim-bot] no awarded draws yet')
+    return
   }
 
-  console.log('[claim-bot] Scanning winners via pt-v5-utils-js / subgraph')
+  console.log('[claim-bot] scanning winners for draw(s) up to', lastAwarded.toString())
+
+  let candidates = []
+  try {
+    const [depositors, winners] = await Promise.all([
+      fetchVaultAccounts(100),
+      fetchRecentWinnerAddresses(50),
+    ])
+    candidates = [...new Set([...depositors, ...winners])]
+  } catch (err) {
+    console.log('[claim-bot] subgraph unavailable, skipping scan:', err.message)
+    return
+  }
+
+  if (candidates.length === 0) {
+    console.log('[claim-bot] no candidate addresses from subgraph')
+    return
+  }
+
+  let claims = 0
+
+  for (const user of candidates) {
+    const wins = await findUnclaimedWins(publicClient, vault, user)
+    if (wins.length === 0) continue
+
+    console.log('[claim-bot] found', wins.length, 'unclaimed prize(s) for', user)
+    await claimForUser(publicClient, walletClient, account, vault, user, wins)
+    claims += wins.length
+  }
+
+  if (claims === 0) {
+    console.log('[claim-bot] no unclaimed prizes found')
+  } else {
+    console.log('[claim-bot] processed', claims, 'prize claim(s)')
+  }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  runClaimBot().catch(console.error)
+export async function runClaimBot() {
+  if (claimWatch) {
+    console.log('[claim-bot] watch mode, poll every', claimPollMs, 'ms')
+    for (;;) {
+      try {
+        await runClaimCycle()
+      } catch (err) {
+        console.error('[claim-bot]', err?.shortMessage || err?.message || err)
+      }
+      await sleep(claimPollMs)
+    }
+  }
+
+  await runClaimCycle()
 }
+
+runClaimBot().catch((err) => {
+  console.error('[claim-bot]', err?.shortMessage || err?.message || err)
+  process.exit(1)
+})

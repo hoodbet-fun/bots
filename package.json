@@ -1,12 +1,15 @@
 {
   "name": "hoodbet-bots",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "liquidation": "node src/liquidation-bot.js",
     "draw": "node src/draw-bot.js",
-    "claim": "node src/claim-bot.js"
+    "liquidation": "node src/liquidation-bot.js",
+    "liquidation:watch": "LIQUIDATION_WATCH=true node src/liquidation-bot.js",
+    "claim": "node src/claim-bot.js",
+    "claim:watch": "CLAIM_WATCH=true node src/claim-bot.js",
+    "harvest": "node -e \"import('./src/harvest.js').then(m => m.runHarvesterIfNeeded())\""
   },
   "dependencies": {
     "viem": "^2.21.0",
