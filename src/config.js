@@ -15,7 +15,7 @@ export const addresses = {
   drawManager: process.env.DRAW_MANAGER_ADDRESS || '0xd1c3d3b690c9a2033b0bea03ba0771847fd983eb',
   prizePool: process.env.PRIZE_POOL_ADDRESS || '0x14e5004a757a85439fc379c8acd5b3b3cdf47344',
   prizeVault: process.env.PRIZE_VAULT_ADDRESS || '0x11da9bE66d20328c6eA16d52079890322fA90f24',
-  hoodFeeHarvester: process.env.HOOD_FEE_HARVESTER_ADDRESS || '0x7FB9C432e78101a6bB59e681458888acaA3db532',
+  hoodFeeHarvester: process.env.HOOD_FEE_HARVESTER_ADDRESS || '0x3632Dd39B2717602fB4d7f79D001c3a51625159d',
   liquidationPair: process.env.LIQUIDATION_PAIR_ADDRESS || '0x8d1877D32eF88DFb98059d1eE50EFCB68094B772',
   liquidationRouter: process.env.LIQUIDATION_ROUTER_ADDRESS || '0xed291bd7ab47d82361f0cbdacbbae0347c530184',
   claimer: process.env.CLAIMER_ADDRESS || '0x71ec0971e8f8e35568a4bbe0fc118e6ca0ebe707',

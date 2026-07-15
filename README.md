@@ -103,7 +103,7 @@ Users can also claim from the app; the bot earns the claim reward.
 | PrizeVault | `0x11da9bE66d20328c6eA16d52079890322fA90f24` |
 | Liquidation pair | `0x8d1877D32eF88DFb98059d1eE50EFCB68094B772` |
 | Liquidation router | `0xed291bd7ab47d82361f0cbdacbbae0347c530184` |
-| HoodFeeHarvester | `0x7FB9C432e78101a6bB59e681458888acaA3db532` |
+| HoodFeeHarvester | `0x3632Dd39B2717602fB4d7f79D001c3a51625159d` |
 | PrizePool | `0x14E5004A757A85439Fc379C8AcD5b3b3CDF47344` |
 | DrawManager | `0xd1c3d3b690c9a2033b0bea03ba0771847fd983eb` |
 | Claimer | `0x71ec0971e8f8e35568a4bbe0fc118e6ca0ebe707` |
