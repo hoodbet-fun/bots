@@ -20,7 +20,7 @@ export async function runHarvesterIfNeeded() {
     return true
   } catch (err) {
     const msg = err?.shortMessage || err?.message || String(err)
-    if (/ZeroShares|zero shares/i.test(msg)) {
+    if (/ZeroShares|zero shares|0x9811e0c7/i.test(msg)) {
       console.log('[harvest] no Morpho fee shares to redeem')
       return false
     }
